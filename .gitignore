@@ -1,0 +1,86 @@
+# Python 通用缓存和编译文件
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 模型权重和大型二进制文件
+*.pth
+*.pt
+*.bin
+*.ckpt
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.onnx
+*.pb
+
+# 预训练模型文件夹
+bert-base-chinese/
+chinese-bert-wwm/
+roberta/
+model/
+models/
+checkpoints/
+
+# 忽略data文件夹里的所有txt和csv数据集文件
+data/*.txt
+data/*.csv
+data/*.jsonl
+data/*.zip
+data/*.rar
+data/*.gz
+# 但明确允许提交标签映射文件
+!data/labels.json
+
+# 日志、可视化和运行输出
+swanlog/
+logs/
+runs/
+output/
+wandb/
+lightning_logs/
+*.log
+*.tmp
+*.out
+
+# AutoDL / Jupyter / Linux系统残留文件
+.autodl/
+.ipynb_checkpoints/
+.Trash-0/
+
+# 编辑器和系统文件
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# 虚拟环境
+.env
+.venv
+venv/
+ENV/
+env/
