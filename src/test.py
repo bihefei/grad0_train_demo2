@@ -3,18 +3,19 @@ import os
 import sys
 
 import torch
-from seqeval.metrics import classification_report, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 from transformers import BertTokenizer
 
 try:
     from .config import Config
-    from .dataset import NERDataset, get_dataset_paths
+    from .dataset import NERDataset, get_dataset_paths, collate_fn
     from .model import BertWithDropout
+    from .metrics import compute_entity_level_metrics
 except ImportError:
     from config import Config
-    from dataset import NERDataset, get_dataset_paths
+    from dataset import NERDataset, get_dataset_paths, collate_fn
     from model import BertWithDropout
+    from metrics import compute_entity_level_metrics
 
 
 # 测试器，负责读取最佳模型并在测试集上做最终评估
@@ -63,17 +64,7 @@ class Tester:
                     all_pred_tags.append(pred_seq)
                     all_true_tags.append(true_seq)
 
-        precision = precision_score(all_true_tags, all_pred_tags)
-        recall = recall_score(all_true_tags, all_pred_tags)
-        f1 = f1_score(all_true_tags, all_pred_tags)
-        report = classification_report(all_true_tags, all_pred_tags, digits=4)
-
-        return {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'report': report
-        }
+        return compute_entity_level_metrics(all_true_tags, all_pred_tags)
 
     # 测试入口，加载权重和标签表，并在测试集上验证模型效果
     def test(self, checkpoint_path=None):
@@ -93,7 +84,7 @@ class Tester:
             max_seq_len=self.config.max_seq_len,
             label_list=label_list
         )
-        test_loader = DataLoader(test_set, batch_size=self.config.batch_size, shuffle=False)
+        test_loader = DataLoader(test_set, batch_size=self.config.batch_size, shuffle=False, collate_fn=collate_fn)
 
         model = BertWithDropout(
             model_name=self.config.model_name,
@@ -109,7 +100,7 @@ class Tester:
         print(f'精确率: {result["precision"]:.4f}')
         print(f'召回率: {result["recall"]:.4f}')
         print(f'F1值: {result["f1"]:.4f}')
-        print('\n详细分类报告:')
+        print('\n详细评估说明:')
         print(result['report'])
 
         return result

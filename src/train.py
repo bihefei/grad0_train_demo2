@@ -3,18 +3,19 @@ import os
 import random
 import numpy as np
 import torch
-from seqeval.metrics import classification_report, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from transformers import BertTokenizer, get_linear_schedule_with_warmup
 import swanlab
 
 try:
-    from .dataset import NERDataset, get_dataset_paths
+    from .dataset import NERDataset, get_dataset_paths, collate_fn
     from .model import BertWithDropout
+    from .metrics import compute_entity_level_metrics
 except ImportError:
-    from dataset import NERDataset, get_dataset_paths
+    from dataset import NERDataset, get_dataset_paths, collate_fn
     from model import BertWithDropout
+    from metrics import compute_entity_level_metrics
 
 
 # 训练器，加载数据、训练模型、验证和保存最佳模型
@@ -59,16 +60,7 @@ class Trainer:
                         true_seq.append(label_list[true_label_id])
                     all_pred_tags.append(pred_seq)
                     all_true_tags.append(true_seq)
-        precision = precision_score(all_true_tags, all_pred_tags)
-        recall = recall_score(all_true_tags, all_pred_tags)
-        f1 = f1_score(all_true_tags, all_pred_tags)
-        report = classification_report(all_true_tags, all_pred_tags, digits=4)
-        return {
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'report': report
-        }
+        return compute_entity_level_metrics(all_true_tags, all_pred_tags)
 
     # 训练过程：加载数据、训练、验证、保存最优模型
     def train_and_evaluate(self):
@@ -106,9 +98,10 @@ class Trainer:
             train_set,
             batch_size=self.config.batch_size,
             shuffle=True,
-            worker_init_fn=_seed_worker
+            worker_init_fn=_seed_worker,
+            collate_fn=collate_fn
         )
-        dev_loader = DataLoader(dev_set, batch_size=self.config.batch_size, shuffle=False)
+        dev_loader = DataLoader(dev_set, batch_size=self.config.batch_size, shuffle=False, collate_fn=collate_fn)
         model = BertWithDropout(
             model_name=self.config.model_name,
             num_labels=num_labels,

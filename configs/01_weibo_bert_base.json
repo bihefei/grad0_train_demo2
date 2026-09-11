@@ -1,7 +1,7 @@
 {
     "dataset": "weibo",
     "data_dir": "./data",
-    "model_name": "./bert-base-chinese",
+    "model_name": "/root/autodl-tmp/demo2-tmp/bert-base-chinese",
     "max_seq_len": 128,
     "batch_size": 8,
     "epochs": 10,
@@ -11,7 +11,7 @@
     "dropout_rate": 0.2,
     "seed": 101,
     "device": "cuda",
-    "save_dir": "./checkpoints",
+    "save_dir": "/root/autodl-tmp/demo2-tmp/checkpoints",
     "use_swanlab": true,
     "swanlab_project": "Chinese_NER_Demo"
 }

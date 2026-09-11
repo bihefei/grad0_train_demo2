@@ -34,6 +34,11 @@ MANIFEST
 *.pickle
 *.onnx
 *.pb
+*.safetensors
+*.safetensors.index.json
+*.msgpack
+*.ot
+*.tflite
 
 # 预训练模型文件夹
 bert-base-chinese/
@@ -41,17 +46,23 @@ chinese-bert-wwm/
 roberta/
 model/
 models/
-checkpoints/
 
-# 忽略data文件夹里的所有txt和csv数据集文件
-data/*.txt
-data/*.csv
-data/*.jsonl
-data/*.zip
-data/*.rar
-data/*.gz
-# 但明确允许提交标签映射文件
-!data/labels.json
+# 说明：checkpoints/ 不做整体忽略。
+# 其中的 best_model.pt 已被上面的 *.pt 规则忽略；
+# 但 experiment_config.json / label_list.json 需要提交，
+# 否则别人克隆仓库后无法执行 README 里的 test.py / predict.py 命令。
+
+# 忽略 data 目录下的数据集文件（含各级子目录，用 ** 才能递归匹配）
+data/**/*.txt
+data/**/*.csv
+data/**/*.jsonl
+data/**/*.zip
+data/**/*.rar
+data/**/*.gz
+data/**/*.tar
+# 例外：保留标签/类别表这类极小的元数据文件（src/dataset.py 会读取）
+!data/**/labels.json
+!data/**/class.txt
 
 # 日志、可视化和运行输出
 swanlog/
@@ -63,6 +74,23 @@ lightning_logs/
 *.log
 *.tmp
 *.out
+*.tfevents
+events.out.tfevents.*
+
+# 压缩包，避免误提交整包备份
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# 测试/类型检查/格式化工具缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # AutoDL / Jupyter / Linux系统残留文件
 .autodl/

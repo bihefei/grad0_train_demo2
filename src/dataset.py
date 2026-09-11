@@ -5,6 +5,32 @@ from torch.utils.data import Dataset
 from transformers import BertTokenizer
 
 
+def collate_fn(batch):
+    if not batch:
+        return {
+            'input_ids': torch.empty((0, 0), dtype=torch.long),
+            'attention_mask': torch.empty((0, 0), dtype=torch.long),
+            'labels': torch.empty((0, 0), dtype=torch.long),
+        }
+
+    max_len = max(len(item['input_ids']) for item in batch)
+    input_ids_list = []
+    attention_mask_list = []
+    labels_list = []
+
+    for item in batch:
+        pad_len = max_len - len(item['input_ids'])
+        input_ids_list.append(item['input_ids'] + [0] * pad_len)
+        attention_mask_list.append(item['attention_mask'] + [0] * pad_len)
+        labels_list.append(item['labels'] + [-100] * pad_len)
+
+    return {
+        'input_ids': torch.tensor(input_ids_list, dtype=torch.long),
+        'attention_mask': torch.tensor(attention_mask_list, dtype=torch.long),
+        'labels': torch.tensor(labels_list, dtype=torch.long),
+    }
+
+
 class NERDataset(Dataset):
 
     def __init__(self, data_path, tokenizer, max_seq_len=128, label_list=None):
@@ -89,15 +115,10 @@ class NERDataset(Dataset):
         input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
         attention_mask = [1] * len(input_ids)
 
-        pad_len = self.max_seq_len - len(input_ids)
-        input_ids += [0] * pad_len
-        attention_mask += [0] * pad_len
-        tag_ids += [-100] * pad_len
-
         return {
-            'input_ids': torch.tensor(input_ids, dtype=torch.long),
-            'attention_mask': torch.tensor(attention_mask, dtype=torch.long),
-            'labels': torch.tensor(tag_ids, dtype=torch.long)
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'labels': tag_ids
         }
 
 
