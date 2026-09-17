@@ -1,5 +1,8 @@
+import glob
 import json
 import os
+import time
+
 import torch
 
 
@@ -16,6 +19,9 @@ class Config:
         with open(config_path,"r", encoding="utf-8") as f:
             cfg = json.load(f)
 
+        self.config_path = config_path
+        self.experiment_name = os.path.splitext(os.path.basename(config_path))[0]
+
         self.dataset = cfg.get('dataset', 'MSRA')
         self.data_dir = cfg.get('data_dir', os.path.join(PROJECT_ROOT, 'data'))
         self.model_name = cfg.get('model_name', os.path.join(PROJECT_ROOT, 'bert-base-chinese'))
@@ -31,6 +37,8 @@ class Config:
         self.seed = cfg.get('seed', 101)
         self.device = cfg.get('device', 'cuda')
         self.save_dir = cfg.get('save_dir', os.path.join(PROJECT_ROOT, 'checkpoints'))
+        # 本次实验实际的保存目录
+        self.experiment_dir = None
 
         # SwanLab监控开关
         self.use_swanlab = cfg.get('use_swanlab', True)
@@ -65,6 +73,31 @@ class Config:
         assert os.path.isdir(self.data_dir), f'数据目录不存在: {self.data_dir}'
         assert os.path.isdir(self.model_name), \
             f'模型目录不存在: {self.model_name}（已强制本地加载，不会联网下载）'
+
+    # 确定本次实验的保存目录
+    # 默认：save_dir / experiment_name（与config文件名一致）
+    # 训练时：该目录若已存在训练好的权重，自动追加时间戳新建目录，历史结果不会被覆盖
+    # 测试/预测时：默认目录不存在，则自动选用该实验名最新一次带时间戳的结果
+    def get_experiment_dir(self, for_training=False):
+        if self.experiment_dir:
+            return self.experiment_dir
+
+        base = os.path.join(self.save_dir, self.experiment_name)
+
+        if for_training:
+            if os.path.exists(os.path.join(base, 'best_model.pt')):
+                stamp = time.strftime('%Y%m%d_%H%M%S')
+                base = f'{base}_{stamp}'
+                print(f'检测到已存在历史训练结果，本次将保存到新目录（不覆盖旧版本）: {base}')
+            os.makedirs(base, exist_ok=True)
+        elif not os.path.isdir(base):
+            candidates = [d for d in glob.glob(f'{base}_*')
+                          if os.path.isfile(os.path.join(d, 'best_model.pt'))]
+            if candidates:
+                base = max(candidates, key=os.path.getmtime)
+
+        self.experiment_dir = base
+        return base
 
     # 当前配置保存成JSON文件
     def save(self, save_path):

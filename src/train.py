@@ -65,11 +65,13 @@ class Trainer:
     # 训练过程：加载数据、训练、验证、保存最优模型
     def train_and_evaluate(self):
         self._set_seed()
+        # 先确定本次的保存目录（已有历史结果时自动追加时间戳），保证SwanLab实验名与保存目录一致
+        save_dir = self.config.get_experiment_dir(for_training=True)
         if self.config.use_swanlab:
             swanlab.init(
                 project=self.config.swanlab_project,
                 config={k: v for k, v in self.config.__dict__.items() if not k.startswith('_')},
-                experiment_name=f'{os.path.basename(self.config.model_name)}_{self.config.dataset}'
+                experiment_name=os.path.basename(save_dir)
             )
         paths, label_list = get_dataset_paths(self.config.dataset, self.config.data_dir)
         tokenizer = BertTokenizer.from_pretrained(self.config.model_name, local_files_only=True)
@@ -127,10 +129,10 @@ class Trainer:
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps
         )
-        best_f1 = 0.0
+        # 初始化为-1而不是0：F1合法范围是[0,1]，-1表示"还没有任何成绩"
+        # 保证第一轮即使F1为0也会保存权重，避免全程无有效实体时训练结束直接报错、无权重可查
+        best_f1 = -1.0
         best_dev_result = None
-        save_dir = os.path.join(self.config.save_dir, f'{os.path.basename(self.config.model_name)}_{self.config.dataset}')
-        os.makedirs(save_dir, exist_ok=True)
 
         for epoch in range(self.config.epochs):
             model.train()

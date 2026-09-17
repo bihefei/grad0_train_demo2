@@ -1,29 +1,32 @@
+# 从BIO标签序列中解析出实体，用于实体级评测
+# 规则：B- 才有资格开启实体；I- 只能延续"同类型且已在实体中"的标签
+#       裸I-（前面是O、或类型不同）属于非法标注，按O处理，不能算成实体
 def _extract_entities(tags):
-    
     entities = set()
     start = None
     cur_type = None
 
     for idx, tag in enumerate(tags):
-        if tag == 'O':
-            # 遇到 O，收尾当前实体
-            if start is not None:
-                entities.add((cur_type, start, idx - 1))
-                start, cur_type = None, None
-            continue
-
         prefix, _, tag_type = tag.partition('-')
+
         if prefix == 'B':
             # B- 开启一个新实体；若上一个实体尚未闭合则先收尾
             if start is not None:
                 entities.add((cur_type, start, idx - 1))
             start, cur_type = idx, tag_type
         elif prefix == 'I':
-            # I- 只有紧跟同类型实体时才算延续，否则当作新实体的起点
-            if start is None or cur_type != tag_type:
-                if start is not None:
-                    entities.add((cur_type, start, idx - 1))
-                start, cur_type = idx, tag_type
+            if start is not None and cur_type == tag_type:
+                # 正常延续：和当前实体同类型，什么都不用做
+                continue
+            # 裸I-：先给上一个实体收尾，然后丢弃这个token
+            if start is not None:
+                entities.add((cur_type, start, idx - 1))
+            start, cur_type = None, None
+        else:
+            # O：收尾当前实体
+            if start is not None:
+                entities.add((cur_type, start, idx - 1))
+            start, cur_type = None, None
 
     # 序列结束时补上最后一个尚未闭合的实体
     if start is not None:

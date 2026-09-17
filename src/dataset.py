@@ -1,8 +1,35 @@
 import os
+import re
 
 import torch
 from torch.utils.data import Dataset
 from transformers import BertTokenizer
+
+
+# BERT自身的BasicTokenizer规则：连续的英文字母/数字视为一个"词"，其余字符（汉字、标点）各自独立
+_WORD_CHAR_RE = re.compile(r'[A-Za-z0-9０-９Ａ-Ｚａ-ｚ]')
+
+
+# 把字符序列按上述规则合并成"词"序列
+# 与整句调用tokenizer.tokenize()得到的切分一致
+# 纯中文场景下等价于逐字切分（一个汉字就是一个词），因此不会改变纯中文数据的结果
+def split_text_into_words(chars):
+    words = []
+    buf = []
+
+    for char in chars:
+        if _WORD_CHAR_RE.fullmatch(char):
+            buf.append(char)
+        else:
+            if buf:
+                words.append(''.join(buf))
+                buf = []
+            words.append(char)
+
+    if buf:
+        words.append(''.join(buf))
+
+    return words
 
 
 def collate_fn(batch):
@@ -93,16 +120,23 @@ class NERDataset(Dataset):
         tokens = []
         tag_ids = []
 
-        # 一个汉字可能拆成多个BERT子词，所以要把标签也按对应位置补齐
-        for char, tag in zip(chars, tags):
-            sub_tokens = self.tokenizer.tokenize(char)
+        # 先按BERT的规则合并成"词"，再对每个词整体做wordpiece
+        # 一个词可能被切成多个子词，
+        # 标签只挂在第一个子词上，其余子词用-100忽略，避免把一个实体重复计数
+        words = split_text_into_words(chars)
+        pos = 0
+        for word in words:
+            tag = tags[pos]  # 词的标签取它第一个字符的标签
+            pos += len(word)
+
+            sub_tokens = self.tokenizer.tokenize(word)
             if not sub_tokens:
-                continue
+                # 极少数字符可能被tokenizer丢弃，用[UNK]占位，避免丢字造成标签错位
+                sub_tokens = ['[UNK]']
 
             tokens.extend(sub_tokens)
             tag_ids.append(self.label2id[tag])
-            for _ in range(len(sub_tokens) - 1):
-                tag_ids.append(-100)
+            tag_ids.extend([-100] * (len(sub_tokens) - 1))
 
         if len(tokens) > self.max_seq_len - 2:
             tokens = tokens[:self.max_seq_len - 2]

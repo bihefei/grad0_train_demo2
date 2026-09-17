@@ -31,7 +31,7 @@ def main():
     result = trainer.train_and_evaluate()
 
     # 训练完成后，保存当前实验配置，方便复现同一实验
-    save_dir = os.path.join(config.save_dir, f'{os.path.basename(config.model_name)}_{config.dataset}')
+    save_dir = config.get_experiment_dir()
     config.save(os.path.join(save_dir, 'experiment_config.json'))
 
     print('\n' + '=' * 50)

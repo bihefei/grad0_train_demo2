@@ -68,7 +68,7 @@ class Tester:
 
     # 测试入口，加载权重和标签表，并在测试集上验证模型效果
     def test(self, checkpoint_path=None):
-        save_dir = os.path.join(self.config.save_dir, f'{os.path.basename(self.config.model_name)}_{self.config.dataset}')
+        save_dir = self.config.get_experiment_dir()
         model_path = checkpoint_path or os.path.join(save_dir, 'best_model.pt')
 
         if not os.path.exists(model_path):

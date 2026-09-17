@@ -8,20 +8,25 @@ from transformers import BertTokenizer
 try:
     from .config import Config
     from .model import BertWithDropout
+    from .dataset import split_text_into_words
 except ImportError:
     from config import Config
     from model import BertWithDropout
+    from dataset import split_text_into_words
+    
 
 
 # 读取已训练好的模型路径和标签表
-def load_model_and_labels(config):
-    save_dir = os.path.join(config.save_dir, f'{os.path.basename(config.model_name)}_{config.dataset}')
+def load_model_and_labels(config, model_path_override=None):
+    save_dir = config.get_experiment_dir()
     label_path = os.path.join(save_dir, 'label_list.json')
-    model_path = os.path.join(save_dir, 'best_model.pt')
+
+    # 如果用户通过 --model_path 指定了模型，就优先检查它；否则检查默认的 best_model.pt
+    model_path = model_path_override or os.path.join(save_dir, 'best_model.pt')
 
     if not os.path.exists(model_path):
         raise FileNotFoundError(
-            f'未找到最佳模型权重: {model_path}。请先运行训练生成模型，再进行预测。'
+            f'未找到模型权重: {model_path}。请先运行训练生成模型，再进行预测。'
         )
     if not os.path.exists(label_path):
         raise FileNotFoundError(
@@ -34,25 +39,34 @@ def load_model_and_labels(config):
     return save_dir, model_path, label_list
 
 
-# 把输入文本转换成token ids，记录每个字符对应的第一个token索引
+# 把输入文本转换成token ids，记录每个字符的标签来源token索引
+# 与训练完全一致：先按BERT规则合并成词，再对每个词整体做wordpiece
 def build_bert_inputs(text, tokenizer, max_seq_len=128):
     tokens = []
-    char_first_token_index = []
-    chars = []
+    word_infos = []  # [(该词包含的字符列表, 该词首个token在序列中的位置)]
 
-    for ch in text:
-        sub_tokens = tokenizer.tokenize(ch)
+    for word in split_text_into_words(text):
+        sub_tokens = tokenizer.tokenize(word)
         if not sub_tokens:
-            # 该字符（如空格）会被tokenizer丢弃，同步跳过，避免标签错位
-            continue
+            # 该字符会被tokenizer丢弃，用[UNK]占位，避免丢字造成标签错位
+            sub_tokens = ['[UNK]']
 
         if len(tokens) + len(sub_tokens) > max_seq_len - 2:
             break
 
-        start = len(tokens)
+        first_token_index = len(tokens) + 1  # +1 跳过开头的[CLS]
         tokens.extend(sub_tokens)
-        char_first_token_index.append(start + 1)
-        chars.append(ch)
+        word_infos.append((list(word), first_token_index))
+
+    # 展开成逐字符形式
+    # 一个词若被切成多个子词，训练时只有首子词带标签，其余子词是-100、输出没有意义，
+    # 所以词内所有字符都取首子词的预测，保证与训练一致，实体也不会被切碎
+    chars = []
+    char_first_token_index = []
+    for word_chars, first_token_index in word_infos:
+        for ch in word_chars:
+            chars.append(ch)
+            char_first_token_index.append(first_token_index)
 
     input_tokens = ['[CLS]'] + tokens + ['[SEP]']
     input_ids = tokenizer.convert_tokens_to_ids(input_tokens)
@@ -72,6 +86,8 @@ def build_bert_inputs(text, tokenizer, max_seq_len=128):
 
 
 # 将BIO标签序列重新组装成实体
+# 与评测口径保持一致：B- 才能开启实体，I- 只能延续同类型实体
+# 裸I-（前面是O或类型不同）按O处理，不能算成实体
 def extract_entities(chars, pred_tags):
     entities = []
     current_type = None
@@ -82,31 +98,24 @@ def extract_entities(chars, pred_tags):
             entities.append((current_type, ''.join(current_chars)))
 
     for ch, tag in zip(chars, pred_tags):
-        if tag == 'O':
+        prefix, _, tag_type = tag.partition('-')
+
+        if prefix == 'B':
             flush()
-            current_type = None
-            current_chars = []
-        elif tag.startswith('B-'):
-            flush()
-            current_type = tag[2:]
-            current_chars = [ch]
-        elif tag.startswith('I-'):
-            if current_type == tag[2:]:
-                current_chars.append(ch)
-            else:
-                flush()
-                current_type = tag[2:]
-                current_chars = [ch]
+            current_type, current_chars = tag_type, [ch]
+        elif prefix == 'I' and current_type == tag_type and current_chars:
+            # 正常延续：和当前实体同类型
+            current_chars.append(ch)
         else:
+            # O，或非法的裸I-：都表示当前实体到此结束
             flush()
-            current_type = None
-            current_chars = []
+            current_type, current_chars = None, []
 
     flush()
     return entities
 
 
-# 识别返回逐字标签和识别出的实体
+# 识别返回逐字标签和识别出的实体（同时返回实际参与推理的 chars，避免原文含空格时错位）
 def predict_text(model, tokenizer, text, label_list, device, max_seq_len):
     model.eval()
     encoded = build_bert_inputs(text, tokenizer, max_seq_len=max_seq_len)
@@ -125,7 +134,7 @@ def predict_text(model, tokenizer, text, label_list, device, max_seq_len):
         pred_tags.append(label_list[pred_id])
 
     entities = extract_entities(encoded['chars'], pred_tags)
-    return pred_tags, entities
+    return encoded['chars'], pred_tags, entities
 
 
 def main():
@@ -138,9 +147,7 @@ def main():
     config = Config(config_path=args.config)
     device = torch.device(config.device)
 
-    save_dir, model_path, label_list = load_model_and_labels(config)
-    if args.model_path:
-        model_path = args.model_path
+    save_dir, model_path, label_list = load_model_and_labels(config, args.model_path)
 
     tokenizer = BertTokenizer.from_pretrained(config.model_name, local_files_only=True)
     model = BertWithDropout(
@@ -160,12 +167,12 @@ def main():
         print('输入为空，退出。')
         return
 
-    pred_tags, entities = predict_text(model, tokenizer, text, label_list, device, config.max_seq_len)
+    chars, pred_tags, entities = predict_text(model, tokenizer, text, label_list, device, config.max_seq_len)
 
     print('\n输入文本：')
     print(text)
     print('\n逐字预测标签：')
-    print(list(zip(list(text), pred_tags)))
+    print(list(zip(chars, pred_tags)))
     print('\n识别结果：')
     if not entities:
         print('未识别到实体')

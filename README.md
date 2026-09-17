@@ -14,15 +14,16 @@
 | 文件名 | 作用说明 |
 | :--- | :--- |
 | `src/main.py` | 项目主入口，负责启动训练、验证与测试流程 |
-| `src/model.py` | BERT‑CRF命名实体识别模型结构定义，包含Dropout正则化 |
+| `src/model.py` | BERT命名实体识别模型结构定义，包含Dropout正则化 |
 | `src/dataset.py` | 数据集加载与预处理，封装数据读取、BIO标签映射与编码逻辑 |
 | `src/train.py` | 训练与验证逻辑，包含学习率调度、最优模型保存 |
 | `src/test.py` | 独立测试脚本，加载最优权重完成测试集指标评估 |
 | `src/predict.py` | 单句文本推理预测脚本，用于实体识别效果演示 |
 | `src/config.py` | 配置加载模块，读取外部JSON格式实验配置 |
+| `src/metrics.py` | 实体级评测模块，从BIO标签序列解析实体并计算Precision/Recall/F1，训练验证与测试共用同一套口径 |
 | `configs/*.json` | 多版本实验超参数配置文件，区分不同模型与数据集 |
 | `requirements.txt` | 项目依赖包清单，可通过`pip install -r requirements.txt`一键安装 |
-| `checkpoints/` | 各实验组最优模型权重保存文件夹，归档本次训练对应的完整实验配置文件 |
+| `checkpoints/<配置名>/` | 每组实验一个子目录，名称与 config 文件名一致，内含 `best_model.pt` / `label_list.json` / `experiment_config.json`；重复训练同一配置时自动追加时间戳新建目录，历史结果不会被覆盖 |
 | `data/` | 数据集文件夹，存放MSRA、Weibo原始文本数据 |
 | `assets/` | 可视化资源文件夹，存放4组实验训练曲线截图 |
 
@@ -56,8 +57,8 @@
 ## 使用方法（以01_msra_bert_base为例）
 1. 安装依赖：`pip install -r requirements.txt`
 2. 运行训练程序：`python src/main.py configs/01_msra_bert_base.json`
-3. 独立测试评估：`python src/test.py checkpoints/bert-base-chinese_MSRA/experiment_config.json`
-4. 单句预测推理：`python src/predict.py --config checkpoints/bert-base-chinese_MSRA/experiment_config.json --text "姚明出生于上海，任职于中国篮协"`
+3. 独立测试评估：`python src/test.py configs/01_msra_bert_base.json`
+4. 单句预测推理：`python src/predict.py --config configs/01_msra_bert_base.json --text "姚明出生于上海，任职于中国篮协"`
 
 ## 查看结果：
     训练过程会实时打印损失、验证集Precision、Recall、F1指标
