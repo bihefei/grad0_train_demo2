@@ -32,6 +32,29 @@ def split_text_into_words(chars):
     return words
 
 
+# 与split_text_into_words完全相同的切分规则，但同时返回每个"词"由几个原始 token 组成
+# tags是按token给出的，而weibo数据里存在emoji、多字符token，它们只对应一个标签，但len可能大于1，
+# 若按字符长度推进pos会导致tags[pos]越界或标签错位
+def split_text_into_words_with_counts(chars):
+    words = []  # [(word_str, token_count), ...]
+    buf = []
+
+    for char in chars:
+        if _WORD_CHAR_RE.fullmatch(char):
+            buf.append(char)
+        else:
+            if buf:
+                words.append((''.join(buf), len(buf)))
+                buf = []
+            # 非英文数字的字符（含emoji等多字符token）整体作为一个词，只占1个token
+            words.append((char, 1))
+
+    if buf:
+        words.append((''.join(buf), len(buf)))
+
+    return words
+
+
 def collate_fn(batch):
     if not batch:
         return {
@@ -123,11 +146,11 @@ class NERDataset(Dataset):
         # 先按BERT的规则合并成"词"，再对每个词整体做wordpiece
         # 一个词可能被切成多个子词，
         # 标签只挂在第一个子词上，其余子词用-100忽略，避免把一个实体重复计数
-        words = split_text_into_words(chars)
+        words = split_text_into_words_with_counts(chars)
         pos = 0
-        for word in words:
-            tag = tags[pos]  # 词的标签取它第一个字符的标签
-            pos += len(word)
+        for word, n_tokens in words:
+            tag = tags[pos]  # 词的标签取它第一个token的标签
+            pos += n_tokens  # 按token数推进，而不是字符长度
 
             sub_tokens = self.tokenizer.tokenize(word)
             if not sub_tokens:
