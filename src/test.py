@@ -4,7 +4,7 @@ import sys
 
 import torch
 from torch.utils.data import DataLoader
-from transformers import BertTokenizer
+from transformers import BertTokenizerFast
 
 try:
     from .config import Config
@@ -76,7 +76,7 @@ class Tester:
 
         label_list = self._load_label_list(save_dir)
         paths, _ = get_dataset_paths(self.config.dataset, self.config.data_dir)
-        tokenizer = BertTokenizer.from_pretrained(self.config.model_name, local_files_only=True)
+        tokenizer = BertTokenizerFast.from_pretrained(self.config.model_name, local_files_only=True)
 
         test_set = NERDataset(
             data_path=paths['test'],

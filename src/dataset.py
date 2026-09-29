@@ -1,58 +1,39 @@
 import os
-import re
 
 import torch
 from torch.utils.data import Dataset
-from transformers import BertTokenizer
 
 
-# BERT自身的BasicTokenizer规则：连续的英文字母/数字视为一个"词"，其余字符（汉字、标点）各自独立
-_WORD_CHAR_RE = re.compile(r'[A-Za-z0-9０-９Ａ-Ｚａ-ｚ]')
+# 把原始token序列（BIO文件中每行一个token：中文通常就是单字，也可能是emoji等多字符token）
+# 整体交给fast tokenizer做wordpiece，再用word_ids()把每个原始token对齐到它的首个子词。
+def encode_words(tokenizer, words, max_seq_len=128):
+    if not getattr(tokenizer, 'is_fast', False):
+        raise ValueError(
+            'encode_words 依赖 fast tokenizer 的 word_ids()，请使用 BertTokenizerFast'
+        )
 
+    encoding = tokenizer(
+        words,
+        is_split_into_words=True,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=max_seq_len,
+    )
 
-# 把字符序列按上述规则合并成"词"序列
-# 与整句调用tokenizer.tokenize()得到的切分一致
-# 纯中文场景下等价于逐字切分（一个汉字就是一个词），因此不会改变纯中文数据的结果
-def split_text_into_words(chars):
-    words = []
-    buf = []
+    input_ids = encoding['input_ids']
+    attention_mask = encoding['attention_mask']
+    word_ids = encoding.word_ids()
 
-    for char in chars:
-        if _WORD_CHAR_RE.fullmatch(char):
-            buf.append(char)
-        else:
-            if buf:
-                words.append(''.join(buf))
-                buf = []
-            words.append(char)
+    # word_ids[i]表示第i个子词属于第几个原始token；[CLS]/[SEP] 等特殊token位置为None
+    # 被tokenizer完全丢弃的原始token（如空白符）在结果中不会有对应位置，保持None
+    word_to_first_token = [None] * len(words)
+    for token_index, word_id in enumerate(word_ids):
+        if word_id is None:
+            continue
+        if word_to_first_token[word_id] is None:
+            word_to_first_token[word_id] = token_index
 
-    if buf:
-        words.append(''.join(buf))
-
-    return words
-
-
-# 与split_text_into_words完全相同的切分规则，但同时返回每个"词"由几个原始 token 组成
-# tags是按token给出的，而weibo数据里存在emoji、多字符token，它们只对应一个标签，但len可能大于1，
-# 若按字符长度推进pos会导致tags[pos]越界或标签错位
-def split_text_into_words_with_counts(chars):
-    words = []  # [(word_str, token_count), ...]
-    buf = []
-
-    for char in chars:
-        if _WORD_CHAR_RE.fullmatch(char):
-            buf.append(char)
-        else:
-            if buf:
-                words.append((''.join(buf), len(buf)))
-                buf = []
-            # 非英文数字的字符（含emoji等多字符token）整体作为一个词，只占1个token
-            words.append((char, 1))
-
-    if buf:
-        words.append((''.join(buf), len(buf)))
-
-    return words
+    return input_ids, attention_mask, word_to_first_token
 
 
 def collate_fn(batch):
@@ -137,40 +118,21 @@ class NERDataset(Dataset):
         return len(self.sentences)
 
     def __getitem__(self, index):
-        chars = self.sentences[index]
+        words = self.sentences[index]
         tags = self.labels[index]
 
-        tokens = []
-        tag_ids = []
+        # 每个原始token独立送入tokenizer，标签挂在它的首个子词上，其余子词用-100忽略
+        # 避免把一个实体重复计数
+        input_ids, attention_mask, word_to_first_token = encode_words(
+            self.tokenizer, words, self.max_seq_len
+        )
 
-        # 先按BERT的规则合并成"词"，再对每个词整体做wordpiece
-        # 一个词可能被切成多个子词，
-        # 标签只挂在第一个子词上，其余子词用-100忽略，避免把一个实体重复计数
-        words = split_text_into_words_with_counts(chars)
-        pos = 0
-        for word, n_tokens in words:
-            tag = tags[pos]  # 词的标签取它第一个token的标签
-            pos += n_tokens  # 按token数推进，而不是字符长度
-
-            sub_tokens = self.tokenizer.tokenize(word)
-            if not sub_tokens:
-                # 极少数字符可能被tokenizer丢弃，用[UNK]占位，避免丢字造成标签错位
-                sub_tokens = ['[UNK]']
-
-            tokens.extend(sub_tokens)
-            tag_ids.append(self.label2id[tag])
-            tag_ids.extend([-100] * (len(sub_tokens) - 1))
-
-        if len(tokens) > self.max_seq_len - 2:
-            tokens = tokens[:self.max_seq_len - 2]
-            tag_ids = tag_ids[:self.max_seq_len - 2]
-
-        # BERT要求前后加[CLS]和[SEP]，并把无效位置用-100忽略
-        tokens = ['[CLS]'] + tokens + ['[SEP]']
-        tag_ids = [-100] + tag_ids + [-100]
-
-        input_ids = self.tokenizer.convert_tokens_to_ids(tokens)
-        attention_mask = [1] * len(input_ids)
+        tag_ids = [-100] * len(input_ids)
+        for word_index, token_index in enumerate(word_to_first_token):
+            if token_index is None:
+                # 该原始token没有对应输入位置（被tokenizer丢弃或超出最大长度），只能跳过其标签
+                continue
+            tag_ids[token_index] = self.label2id[tags[word_index]]
 
         return {
             'input_ids': input_ids,

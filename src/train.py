@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from transformers import BertTokenizer, get_linear_schedule_with_warmup
+from transformers import BertTokenizerFast, get_linear_schedule_with_warmup
 import swanlab
 
 try:
@@ -74,7 +74,7 @@ class Trainer:
                 experiment_name=os.path.basename(save_dir)
             )
         paths, label_list = get_dataset_paths(self.config.dataset, self.config.data_dir)
-        tokenizer = BertTokenizer.from_pretrained(self.config.model_name, local_files_only=True)
+        tokenizer = BertTokenizerFast.from_pretrained(self.config.model_name, local_files_only=True)
         train_set = NERDataset(
             data_path=paths['train'],
             tokenizer=tokenizer,

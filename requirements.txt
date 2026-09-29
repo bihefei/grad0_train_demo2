@@ -3,6 +3,7 @@ torchvision==0.18.0
 torchaudio==2.3.0
 
 transformers==4.46.2
+tokenizers==0.20.3
 swanlab==0.10.0
 numpy==1.26.2
 huggingface-hub==0.19.4
