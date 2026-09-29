@@ -17,30 +17,46 @@ except ImportError:
 
 
 # 读取已训练好的模型路径和标签表
+# 权重与标签表必须来自同一组实验：训练时 label_list.json 就写在 best_model.pt 旁边，
+# 标签表一律优先取"权重文件所在目录"下的那份，--model_path 换权重时标签表会跟着换，
+# 不再固定读取 --config 对应目录，避免权重与标签表分属两组实验
 def load_model_and_labels(config, model_path_override=None):
     save_dir = config.get_experiment_dir()
-    label_path = os.path.join(save_dir, 'label_list.json')
+    default_model_path = os.path.join(save_dir, 'best_model.pt')
 
     # 如果用户通过--model_path指定了模型，就优先检查它；否则检查默认的best_model.pt
-    model_path = model_path_override or os.path.join(save_dir, 'best_model.pt')
+    model_path = model_path_override or default_model_path
 
     if not os.path.exists(model_path):
         raise FileNotFoundError(
             f'未找到模型权重: {model_path}。请先运行训练生成模型，再进行预测。'
         )
+
+    # 标签表与权重视为一个整体：先找权重同目录下那份
+    model_dir = os.path.dirname(os.path.abspath(model_path))
+    label_path = os.path.join(model_dir, 'label_list.json')
+
     if not os.path.exists(label_path):
-        raise FileNotFoundError(
-            f'未找到标签映射文件: {label_path}。请先运行训练生成 label_list.json。'
-        )
+        # 权重被单独拷贝出来时才回退，此时无法保证标签表与权重匹配，显式警告
+        label_path = os.path.join(save_dir, 'label_list.json')
+        if not os.path.exists(label_path):
+            raise FileNotFoundError(
+                f'未找到标签映射文件: {label_path}。请先运行训练生成 label_list.json。'
+            )
+        print(f'[警告] 权重目录 {model_dir} 下没有 label_list.json，'
+              f'已回退使用 {label_path}。\n'
+              f'       两者若不属于同一组实验，标签顺序可能不同，预测结果会静默出错，请核对后再用。')
 
     with open(label_path, 'r', encoding='utf-8') as f:
         label_list = json.load(f)
+
+    print(f'权重: {model_path}')
+    print(f'标签表: {label_path}（共 {len(label_list)} 个标签）')
 
     return save_dir, model_path, label_list
 
 
 # 把输入文本转换成token ids，并用word_ids()记录每个字符对应的首个子词位置
-# 与训练保持一致：同样由外部给定词边界，每个字符独立作为一个词送入tokenizer
 def build_bert_inputs(text, tokenizer, max_seq_len=128):
     chars = list(text)
 
@@ -130,13 +146,31 @@ def main():
     save_dir, model_path, label_list = load_model_and_labels(config, args.model_path)
 
     tokenizer = BertTokenizerFast.from_pretrained(config.model_name, local_files_only=True)
+
+    # 读一次权重，并用分类头的真实输出维度校验标签数量
+    state_dict = torch.load(model_path, map_location=device)
+    classifier_weight = state_dict.get('classifier.weight')
+    if classifier_weight is None:
+        raise KeyError(
+            f'权重文件 {model_path} 中没有 classifier.weight，'
+            f'请确认这是本项目训练产出的 best_model.pt'
+        )
+    weight_num_labels = classifier_weight.shape[0]
+    if weight_num_labels != len(label_list):
+        raise ValueError(
+            f'权重与标签表不匹配：{model_path} 的分类头输出维度是 {weight_num_labels}，'
+            f'而当前使用的标签表有 {len(label_list)} 个标签。\n'
+            f'       请确认 --model_path 与 --config 指向同一组实验，'
+            f'或把该实验的 label_list.json 放在权重同目录下。'
+        )
+
     model = BertWithDropout(
         model_name=config.model_name,
         num_labels=len(label_list),
         dropout_rate=config.dropout_rate
     )
     model.to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(state_dict)
 
     if args.text is not None:
         text = args.text
