@@ -9,13 +9,13 @@ from transformers import BertTokenizerFast, get_linear_schedule_with_warmup
 import swanlab
 
 try:
-    from .dataset import NERDataset, get_dataset_paths, collate_fn
+    from .dataset import NERDataset
     from .model import BertWithDropout
-    from .metrics import compute_entity_level_metrics
+    from .metrics import EntityLevelEvaluator
 except ImportError:
-    from dataset import NERDataset, get_dataset_paths, collate_fn
+    from dataset import NERDataset
     from model import BertWithDropout
-    from metrics import compute_entity_level_metrics
+    from metrics import EntityLevelEvaluator
 
 
 # 训练器，加载数据、训练模型、验证和保存最佳模型
@@ -35,32 +35,26 @@ class Trainer:
             torch.backends.cudnn.benchmark = False
 
     # 评估模型精确率、召回率和F1
-    def _evaluate(self, model, data_loader, label_list):
+    # 先收集整个验证集的预测id与标签id，再交给评测器统一计算
+    # -100的位置（padding、特殊token、非首子词）由评测器跳过，不参与统计
+    def _evaluate(self, model, data_loader, evaluator):
         model.eval()
-        all_pred_tags = []
-        all_true_tags = []
+        all_pred_ids = []
+        all_label_ids = []
+
         with torch.no_grad():
             for batch in data_loader:
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
+
                 outputs = model(input_ids, attention_mask)
-                logits = outputs.logits
-                preds = torch.argmax(logits, dim=-1)
-                batch_size = preds.shape[0]
-                for i in range(batch_size):
-                    pred_seq = []
-                    true_seq = []
-                    seq_len = preds.shape[1]
-                    for j in range(seq_len):
-                        true_label_id = labels[i][j].item()
-                        if true_label_id == -100:
-                            continue
-                        pred_seq.append(label_list[preds[i][j].item()])
-                        true_seq.append(label_list[true_label_id])
-                    all_pred_tags.append(pred_seq)
-                    all_true_tags.append(true_seq)
-        return compute_entity_level_metrics(all_true_tags, all_pred_tags)
+                pred_ids = torch.argmax(outputs.logits, dim=-1)
+
+                all_pred_ids.extend(pred_ids.cpu().tolist())
+                all_label_ids.extend(labels.cpu().tolist())
+
+        return evaluator.compute(all_pred_ids, all_label_ids)
 
     # 训练过程：加载数据、训练、验证、保存最优模型
     def train_and_evaluate(self):
@@ -73,7 +67,7 @@ class Trainer:
                 config={k: v for k, v in self.config.__dict__.items() if not k.startswith('_')},
                 experiment_name=os.path.basename(save_dir)
             )
-        paths, label_list = get_dataset_paths(self.config.dataset, self.config.data_dir)
+        paths, label_list = NERDataset.get_dataset_paths(self.config.dataset, self.config.data_dir)
         tokenizer = BertTokenizerFast.from_pretrained(self.config.model_name, local_files_only=True)
         train_set = NERDataset(
             data_path=paths['train'],
@@ -89,6 +83,8 @@ class Trainer:
             max_seq_len=self.config.max_seq_len,
             label_list=label_list
         )
+        # 评测器与训练集共用同一份标签表，保证id到标签的翻译口径一致
+        evaluator = EntityLevelEvaluator(label_list)
 
         # DataLoader的worker固定随机种子
         def _seed_worker(worker_id):
@@ -101,9 +97,14 @@ class Trainer:
             batch_size=self.config.batch_size,
             shuffle=True,
             worker_init_fn=_seed_worker,
-            collate_fn=collate_fn
+            collate_fn=NERDataset.collate_fn
         )
-        dev_loader = DataLoader(dev_set, batch_size=self.config.batch_size, shuffle=False, collate_fn=collate_fn)
+        dev_loader = DataLoader(
+            dev_set,
+            batch_size=self.config.batch_size,
+            shuffle=False,
+            collate_fn=NERDataset.collate_fn
+        )
         model = BertWithDropout(
             model_name=self.config.model_name,
             num_labels=num_labels,
@@ -149,7 +150,7 @@ class Trainer:
                 optimizer.zero_grad()
                 total_train_loss += loss.item()
             avg_loss = total_train_loss / len(train_loader)
-            dev_result = self._evaluate(model, dev_loader, label_list)
+            dev_result = self._evaluate(model, dev_loader, evaluator)
             print(f'===== Epoch {epoch + 1}/{self.config.epochs} =====')
             print(f'训练损失: {avg_loss:.4f}')
             print(f'验证集: 精确率={dev_result["precision"]:.4f} '

@@ -8,14 +8,14 @@ from transformers import BertTokenizerFast
 
 try:
     from .config import Config
-    from .dataset import NERDataset, get_dataset_paths, collate_fn
+    from .dataset import NERDataset
     from .model import BertWithDropout
-    from .metrics import compute_entity_level_metrics
+    from .metrics import EntityLevelEvaluator
 except ImportError:
     from config import Config
-    from dataset import NERDataset, get_dataset_paths, collate_fn
+    from dataset import NERDataset
     from model import BertWithDropout
-    from metrics import compute_entity_level_metrics
+    from metrics import EntityLevelEvaluator
 
 
 # 测试器，负责读取最佳模型并在测试集上做最终评估
@@ -32,11 +32,11 @@ class Tester:
         with open(label_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    # 评估函数，把模型输出的label id转成实体标签，统计精确率、召回率和 F1
-    def _evaluate(self, model, data_loader, label_list):
+    # 评估函数，先收集整个测试集的预测id与标签id，再交给评测器统计精确率、召回率和F1
+    def _evaluate(self, model, data_loader, evaluator):
         model.eval()
-        all_pred_tags = []
-        all_true_tags = []
+        all_pred_ids = []
+        all_label_ids = []
 
         with torch.no_grad():
             for batch in data_loader:
@@ -45,26 +45,12 @@ class Tester:
                 labels = batch['labels'].to(self.device)
 
                 outputs = model(input_ids, attention_mask)
-                logits = outputs.logits
-                preds = torch.argmax(logits, dim=-1)
+                pred_ids = torch.argmax(outputs.logits, dim=-1)
 
-                batch_size = preds.shape[0]
-                for i in range(batch_size):
-                    pred_seq = []
-                    true_seq = []
-                    seq_len = preds.shape[1]
+                all_pred_ids.extend(pred_ids.cpu().tolist())
+                all_label_ids.extend(labels.cpu().tolist())
 
-                    for j in range(seq_len):
-                        true_label_id = labels[i][j].item()
-                        if true_label_id == -100:
-                            continue
-                        pred_seq.append(label_list[preds[i][j].item()])
-                        true_seq.append(label_list[true_label_id])
-
-                    all_pred_tags.append(pred_seq)
-                    all_true_tags.append(true_seq)
-
-        return compute_entity_level_metrics(all_true_tags, all_pred_tags)
+        return evaluator.compute(all_pred_ids, all_label_ids)
 
     # 测试入口，加载权重和标签表，并在测试集上验证模型效果
     def test(self, checkpoint_path=None):
@@ -75,7 +61,7 @@ class Tester:
             raise FileNotFoundError(f'未找到测试用模型权重: {model_path}，请先执行训练生成最佳模型。')
 
         label_list = self._load_label_list(save_dir)
-        paths, _ = get_dataset_paths(self.config.dataset, self.config.data_dir)
+        paths, _ = NERDataset.get_dataset_paths(self.config.dataset, self.config.data_dir)
         tokenizer = BertTokenizerFast.from_pretrained(self.config.model_name, local_files_only=True)
 
         test_set = NERDataset(
@@ -84,7 +70,12 @@ class Tester:
             max_seq_len=self.config.max_seq_len,
             label_list=label_list
         )
-        test_loader = DataLoader(test_set, batch_size=self.config.batch_size, shuffle=False, collate_fn=collate_fn)
+        test_loader = DataLoader(
+            test_set,
+            batch_size=self.config.batch_size,
+            shuffle=False,
+            collate_fn=NERDataset.collate_fn
+        )
 
         model = BertWithDropout(
             model_name=self.config.model_name,
@@ -94,7 +85,9 @@ class Tester:
         model.to(self.device)
         model.load_state_dict(torch.load(model_path, map_location=self.device))
 
-        result = self._evaluate(model, test_loader, label_list)
+        # 评测器使用训练时保存的标签表，保证id到标签的翻译与训练一致
+        evaluator = EntityLevelEvaluator(label_list)
+        result = self._evaluate(model, test_loader, evaluator)
 
         print('\n===== 测试集最终评估 =====')
         print(f'精确率: {result["precision"]:.4f}')
